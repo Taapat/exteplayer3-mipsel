@@ -1279,7 +1279,6 @@ int32_t container_ffmpeg_init(Context_t *context, PlayFiles_t *playFilesNames)
     }
 
     /* initialize ffmpeg */
-    avcodec_register_all();
     av_register_all();
     avformat_network_init();
     
