@@ -1320,11 +1320,6 @@ int32_t container_ffmpeg_update_tracks(Context_t *context, char *filename, int32
         return cERR_CONTAINER_FFMPEG_NO_ERROR;
     }
 
-    Track_t *audioTrack = NULL;
-
-    context->manager->audio->Command(context, MANAGER_GET_TRACK, &audioTrack);
-
-
     if (context->manager->video)
     {
         context->manager->video->Command(context, MANAGER_INIT_UPDATE, NULL);
@@ -1483,7 +1478,6 @@ int32_t container_ffmpeg_update_tracks(Context_t *context, char *filename, int32
 
                         AVCodec *codec = avcodec_find_decoder(stream->codec->codec_id);
 
-                        //( (AVStream*) audioTrack->stream)->codec->flags |= CODEC_FLAG_TRUNCATED;
                         int errorCode = avcodec_open2(stream->codec, codec, NULL);
                         if(codec != NULL && !errorCode)
                         {
