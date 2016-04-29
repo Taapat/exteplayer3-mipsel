@@ -1112,8 +1112,17 @@ AVIOContext* container_ffmpeg_get_avio_context(char *filename, size_t avio_ctx_b
 
 int32_t container_ffmpeg_init_av_context(Context_t *context, char *filename, int32_t AVIdx)
 {
+    int ret = 0;
     int32_t err = 0;
+    char error[512];
     avContextTab[AVIdx] = avformat_alloc_context();
+    if (!avContextTab[AVIdx])
+    {
+        ffmpeg_err("avformat_alloc_context failed\n");
+        ret = cERR_CONTAINER_FFMPEG_OPEN;
+        goto fail_alloc;
+    }
+    
     avContextTab[AVIdx]->interrupt_callback.callback = interrupt_cb;
     avContextTab[AVIdx]->interrupt_callback.opaque = context->playback;
 
@@ -1129,7 +1138,8 @@ int32_t container_ffmpeg_init_av_context(Context_t *context, char *filename, int
         }
         else
         {
-            return cERR_CONTAINER_FFMPEG_OPEN;
+            ret = cERR_CONTAINER_FFMPEG_OPEN;
+            goto fail_alloc;
         }
     }
 #endif
@@ -1141,34 +1151,14 @@ int32_t container_ffmpeg_init_av_context(Context_t *context, char *filename, int
         av_dict_set(&avio_opts, "reconnect", "1", 0);
         if ((err = avformat_open_input(&avContextTab[AVIdx], filename, NULL, &avio_opts)) != 0)
         {
-            char error[512];
-
-            ffmpeg_err("avformat_open_input failed %d (%s)\n", err, filename);
-            av_strerror(err, error, 512);
-            ffmpeg_err("Cause: %s\n", error);
-
-            if(avio_opts != NULL)
-            {
-                av_dict_free(&avio_opts);
-            }
-            releaseMutex(__FILE__, __FUNCTION__,__LINE__);
-            return cERR_CONTAINER_FFMPEG_OPEN;
+            ret = cERR_CONTAINER_FFMPEG_OPEN;
+            goto fail_open;
         }
     }
     else if ((err = avformat_open_input(&avContextTab[AVIdx], filename, NULL, 0)) != 0)
     {
-        char error[512] = "";
-
-        ffmpeg_err("avformat_open_input failed %d (%s)\n", err, filename);
-        av_strerror(err, error, 512);
-        ffmpeg_err("Cause: %s\n", error);
-
-        if(avio_opts != NULL)
-        {
-            av_dict_free(&avio_opts);
-        }
-        releaseMutex(__FILE__, __FUNCTION__,__LINE__);
-        return cERR_CONTAINER_FFMPEG_OPEN;
+        ret = cERR_CONTAINER_FFMPEG_OPEN;
+        goto fail_open;
     }
 
     avContextTab[AVIdx]->iformat->flags |= AVFMT_SEEK_TO_PTS;
@@ -1193,9 +1183,8 @@ int32_t container_ffmpeg_init_av_context(Context_t *context, char *filename, int
          * but the file is played back well. so remove this
          * until other works are done and we can prove this.
          */
-        avformat_close_input(&avContextTab[AVIdx]);
-        releaseMutex(__FILE__, __FUNCTION__,__LINE__);
-        return cERR_CONTAINER_FFMPEG_STREAM;
+        ret = cERR_CONTAINER_FFMPEG_STREAM;
+        goto fail;
 #endif
     }
 
@@ -1237,8 +1226,21 @@ int32_t container_ffmpeg_init_av_context(Context_t *context, char *filename, int
         }
     }
 //for buffered io (end)
-    
-    return 0;
+    return ret;
+
+fail_open:
+    ffmpeg_err("avformat_open_input failed %d (%s)\n", err, filename);
+    av_strerror(err, error, 512);
+    ffmpeg_err("Cause: %s\n", error);
+    if(avio_opts != NULL)
+    {
+        av_dict_free(&avio_opts);
+    }
+fail:
+    avformat_close_input(&avContextTab[AVIdx]);
+fail_alloc:
+    avformat_network_deinit();
+    return ret;
 }
 
 int32_t container_ffmpeg_init(Context_t *context, PlayFiles_t *playFilesNames)
