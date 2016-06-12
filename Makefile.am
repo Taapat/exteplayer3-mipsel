@@ -13,8 +13,10 @@ libexteplayer3_la_SOURCES = \
     container/container_ffmpeg.c \
     manager/audio.c \
     manager/manager.c \
+    manager/subtitle.c \
     manager/video.c \
     output/linuxdvb_mipsel.c \
+    output/output_subtitle.c \
     output/output.c \
     output/writer/mipsel/writer.c \
     output/writer/common/pes.c \
