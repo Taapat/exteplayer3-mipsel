@@ -165,6 +165,11 @@ static int HandleTracks(const Manager_t *ptrManager, const PlaybackCmd_t playbac
                 fprintf(stderr, "]}\n");
                 free(TrackList);
             }
+            else
+            {
+                // not tracks 
+                fprintf(stderr, "{\"%c_%c\": []}\n", argvBuff[0], argvBuff[1]);
+            }
             break;
         }
         case 'c': 
@@ -174,7 +179,7 @@ static int HandleTracks(const Manager_t *ptrManager, const PlaybackCmd_t playbac
             ptrManager->Command(g_player, MANAGER_GET_TRACK_DESC, &track);
             if (NULL != track) 
             {
-                if ('a' == argvBuff[0])
+                if ('a' == argvBuff[0] || 's' == argvBuff[0])
                 {
                     fprintf(stderr, "{\"%c_%c\":{\"id\":%d,\"e\":\"%s\",\"n\":\"%s\"}}\n", argvBuff[0], argvBuff[1], track->Id , track->Encoding, track->Name);
                 }
@@ -186,18 +191,31 @@ static int HandleTracks(const Manager_t *ptrManager, const PlaybackCmd_t playbac
                 free(track->Name);
                 free(track);
             }
+            else
+            {
+                // no tracks
+                if ('a' == argvBuff[0] || 's' == argvBuff[0])
+                {
+                    fprintf(stderr, "{\"%c_%c\":{\"id\":%d,\"e\":\"%s\",\"n\":\"%s\"}}\n", argvBuff[0], argvBuff[1], -1, "", "");
+                }
+                else // video
+                {
+                    fprintf(stderr, "{\"%c_%c\":{\"id\":%d,\"e\":\"%s\",\"n\":\"%s\",\"w\":%d,\"h\":%d,\"f\":%u}}\n", argvBuff[0], argvBuff[1], -1, "", "", -1, -1, 0);
+                }
+            }
             break;
         }
         default: 
         {
-            /* switch command available only for audio tracks */
-            if ('a' == argvBuff[0])
+            /* switch command available only for audio and subtitle tracks */
+            if ('a' == argvBuff[0] || 's' == argvBuff[0])
             {
+                int ok = 0;
                 int id = -1;
                 if ('i' == argvBuff[1])
                 {
                     int idx = -1;
-                    sscanf(argvBuff+2, "%d", &idx);
+                    ok = sscanf(argvBuff+2, "%d", &idx);
                     if (idx >= 0)
                     {
                         TrackDescription_t *TrackList = NULL;
@@ -217,13 +235,17 @@ static int HandleTracks(const Manager_t *ptrManager, const PlaybackCmd_t playbac
                             free(TrackList);
                         }
                     }
+                    else
+                    {
+                        id = idx;
+                    }
                 }
                 else
                 {
-                    sscanf(argvBuff+1, "%d", &id);
+                    ok = sscanf(argvBuff+1, "%d", &id);
                 }
                 
-                if(id >= 0)
+                if(id >= 0 || (1 == ok && id == -1))
                 {
                     commandRetVal = g_player->playback->Command(g_player, playbackSwitchCmd, (void*)&id);
                     fprintf(stderr, "{\"%c_%c\":{\"id\":%d,\"sts\":%d}}\n", argvBuff[0], 's', id, commandRetVal);
@@ -236,14 +258,14 @@ static int HandleTracks(const Manager_t *ptrManager, const PlaybackCmd_t playbac
     return commandRetVal;
 }
 
-static int ParseParams(int argc,char* argv[], char *file, char *audioFile, int *pAudioTrackIdx)
+static int ParseParams(int argc,char* argv[], char *file, char *audioFile, int *pAudioTrackIdx, int *subtitleTrackIdx)
 {   
     int ret = 0;
     int c;
     int digit_optind = 0;
     int aopt = 0, bopt = 0;
     char *copt = 0, *dopt = 0;
-    while ( (c = getopt(argc, argv, "wae3dlsrix:u:c:h:o:p:t:")) != -1) 
+    while ( (c = getopt(argc, argv, "wae3dlsrix:u:c:h:o:p:t:9:")) != -1) 
     {
         switch (c) 
         {
@@ -288,6 +310,9 @@ static int ParseParams(int argc,char* argv[], char *file, char *audioFile, int *
             break;
         case 't':
             *pAudioTrackIdx = atoi(optarg);
+            break;
+        case '9':
+            *subtitleTrackIdx = atoi(optarg);
             break;
         case 'x':
             strncpy(audioFile, optarg, IPTV_MAX_FILE_PATH-1);
@@ -341,15 +366,17 @@ int main(int argc, char* argv[])
     memset(audioFile, '\0', sizeof(audioFile));
     
     int audioTrackIdx = -1;
+    int subtitleTrackIdx = -1;
+    
     char argvBuff[256];
     memset(argvBuff, '\0', sizeof(argvBuff));
     int commandRetVal = -1;
     /* inform client that we can handle additional commands */
-    fprintf(stderr, "{\"EPLAYER3_EXTENDED\":{\"version\":%d}}\n", 26);
+    fprintf(stderr, "{\"EPLAYER3_EXTENDED\":{\"version\":%d}}\n", 27);
 
-    if (0 != ParseParams(argc, argv, file, audioFile, &audioTrackIdx))
+    if (0 != ParseParams(argc, argv, file, audioFile, &audioTrackIdx, &subtitleTrackIdx))
     {
-        printf("Usage: exteplayer3 filePath [-u user-agent] [-c cookies] [-h headers] [-p prio] [-a] [-d] [-w] [-l] [-s] [-i] [-t audioTrackId] [-x separateAudioUri] plabackUri\n");
+        printf("Usage: exteplayer3 filePath [-u user-agent] [-c cookies] [-h headers] [-p prio] [-a] [-d] [-w] [-l] [-s] [-i] [-t audioTrackId] [-9 subtitleTrackId] [-x separateAudioUri] plabackUri\n");
         printf("[-a] AAC software decoding\n");
         printf("[-e] EAC3 software decoding\n");
         printf("[-3] AC3 software decoding\n");
@@ -361,8 +388,10 @@ int main(int argc, char* argv[])
         printf("[-o 0|1] set progressive download\n");
         printf("[-p value] nice value\n");
         printf("[-t id] audio track ID switched on at start\n");
+        printf("[-9 id] subtitle track ID switched on at start\n");
         printf("[-h headers] set custom HTTP headers \"Name: value\\r\\nName: value\\r\\n\"\n");
         printf("[-u user-agent] set custom http User-Agent header\n");
+        printf("[-c cookies] set cookies - not working at now, please use -h instead\n");
         printf("[-x separateAudioUri]\n");
         
         exit(1);
@@ -383,8 +412,9 @@ int main(int argc, char* argv[])
     SetBuffering();
     
     //Registrating output devices
-    g_player->output->Command(g_player,OUTPUT_ADD, "audio");
-    g_player->output->Command(g_player,OUTPUT_ADD, "video");
+    g_player->output->Command(g_player, OUTPUT_ADD, "audio");
+    g_player->output->Command(g_player, OUTPUT_ADD, "video");
+    g_player->output->Command(g_player, OUTPUT_ADD, "subtitle");
     g_player->playback->noprobe = 1;
     
     PlayFiles_t playbackFiles = {file, NULL};
@@ -421,6 +451,15 @@ int main(int argc, char* argv[])
                 commandRetVal = HandleTracks(g_player->manager->audio, PLAYBACK_SWITCH_AUDIO, cmd);
             }
             HandleTracks(g_player->manager->audio, (PlaybackCmd_t)-1, "ac");
+            
+            HandleTracks(g_player->manager->subtitle, (PlaybackCmd_t)-1, "sl");
+            if (subtitleTrackIdx >= 0)
+            {
+                static char cmd[128] = ""; // static to not allocate on stack
+                sprintf(cmd, "si%d\n", subtitleTrackIdx);
+                commandRetVal = HandleTracks(g_player->manager->subtitle, PLAYBACK_SWITCH_SUBTITLE, cmd);
+            }
+            HandleTracks(g_player->manager->subtitle, (PlaybackCmd_t)-1, "sc");
         }
 
         while(g_player->playback->isPlaying)
@@ -448,6 +487,11 @@ int main(int argc, char* argv[])
             case 'a': 
             {
                 HandleTracks(g_player->manager->audio, PLAYBACK_SWITCH_AUDIO, argvBuff);
+            break;
+            }
+            case 's': 
+            {
+                HandleTracks(g_player->manager->subtitle, PLAYBACK_SWITCH_SUBTITLE, argvBuff);
             break;
             }
             case 'q':
