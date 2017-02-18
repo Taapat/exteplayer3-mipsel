@@ -34,13 +34,11 @@
 #include <sys/uio.h>
 #include <linux/dvb/video.h>
 #include <linux/dvb/audio.h>
+#include <linux/dvb/stm_ioctls.h>
 #include <memory.h>
 #include <asm/types.h>
 #include <pthread.h>
 #include <errno.h>
-
-#include "stm_ioctls.h"
-#include "bcm_ioctls.h"
 
 #include "common.h"
 #include "output.h"
@@ -52,27 +50,31 @@
 /* ***************************** */
 /* Makros/Constants              */
 /* ***************************** */
+#define PES_AUDIO_PRIVATE_HEADER_SIZE   16                                // consider maximum private header size.
+#define PES_AUDIO_HEADER_SIZE           (32 + PES_AUDIO_PRIVATE_HEADER_SIZE)
+#define PES_AUDIO_PACKET_SIZE           2028
+#define SPDIF_AUDIO_PACKET_SIZE         (1024 * sizeof(unsigned int) * 2) // stereo 32bit samples.
 
 #ifdef SAM_WITH_DEBUG
-#define WMA_DEBUG
+#define DTS_DEBUG
 #else
-#define WMA_SILENT
+#define DTS_SILENT
 #endif
 
-#ifdef WMA_DEBUG
+#ifdef DTS_DEBUG
 
 static short debug_level = 0;
 
-#define wma_printf(level, fmt, x...) do { \
+#define dts_printf(level, fmt, x...) do { \
 if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
 #else
-#define wma_printf(level, fmt, x...)
+#define dts_printf(level, fmt, x...)
 #endif
 
-#ifndef WMA_SILENT
-#define wma_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
+#ifndef DTS_SILENT
+#define dts_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
 #else
-#define wma_err(fmt, x...)
+#define dts_err(fmt, x...)
 #endif
 
 /* ***************************** */
@@ -83,10 +85,6 @@ if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); 
 /* Varaibles                     */
 /* ***************************** */
 
-static int initialHeader = 1;
-static uint8_t *PesHeader = NULL;
-static uint32_t MaxPesHeader = 0;
-
 /* ***************************** */
 /* Prototypes                    */
 /* ***************************** */
@@ -94,120 +92,94 @@ static uint32_t MaxPesHeader = 0;
 /* ***************************** */
 /* MISC Functions                */
 /* ***************************** */
-
 static int reset()
 {
-    initialHeader = 1;
     return 0;
 }
 
-static int writeData(void* _call)
+static int32_t writeData(void* _call)
 {
     WriterAVCallData_t* call = (WriterAVCallData_t*) _call;
 
-    int len = 0;
+    uint8_t PesHeader[PES_AUDIO_HEADER_SIZE];
 
-    wma_printf(10, "\n");
+    dts_printf(10, "\n");
 
     if (call == NULL)
     {
-        wma_err("call data is NULL...\n");
+        dts_err("call data is NULL...\n");
         return 0;
     }
 
-    wma_printf(10, "AudioPts %lld\n", call->Pts);
+    dts_printf(10, "AudioPts %lld\n", call->Pts);
 
     if ((call->data == NULL) || (call->len <= 0))
     {
-        wma_err("parsing NULL Data. ignoring...\n");
+        dts_err("parsing NULL Data. ignoring...\n");
         return 0;
     }
 
     if (call->fd < 0)
     {
-        wma_err("file pointer < 0. ignoring ...\n");
+        dts_err("file pointer < 0. ignoring ...\n");
         return 0;
     }
 
-    uint32_t packetLength = 4 + call->private_size + call->len;
-    
-    if( IsDreambox() )
+    uint8_t *Data = call->data;
+    int32_t Size = call->len;
+
+#ifdef CHECK_FOR_DTS_HD
+    int32_t pos = 0;
+    while ((pos + 4) <= Size)
     {
-        packetLength += 4;
-    }
-    
-    if((packetLength + PES_MAX_HEADER_SIZE)  > MaxPesHeader)
-    {
-        if(PesHeader)
+        // check for DTS-HD 
+        if (!strcmp((char*)(Data + pos), "\x64\x58\x20\x25"))
         {
-            free(PesHeader);
+            Size = pos;
+            break;
         }
-        MaxPesHeader = packetLength + PES_MAX_HEADER_SIZE;
-        PesHeader = malloc(MaxPesHeader);
+        ++pos;
     }
-
-    uint32_t headerSize = InsertPesHeader(PesHeader, packetLength, MPEG_AUDIO_PES_START_CODE, call->Pts, 0);
-    if( IsDreambox() )
-    {
-        PesHeader[headerSize++] = 0x42; // B
-        PesHeader[headerSize++] = 0x43; // C
-        PesHeader[headerSize++] = 0x4D; // M
-        PesHeader[headerSize++] = 0x41; // A
-    }
-
-    size_t payload_len = call->len;
-    PesHeader[headerSize++] = (payload_len >> 24) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 16) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 8)  & 0xff;
-    PesHeader[headerSize++] = payload_len & 0xff;
-        
-    memcpy(PesHeader + headerSize, call->private_data, call->private_size);
-    headerSize += call->private_size;
+#endif
     
-    PesHeader[6] |= 1;
+// #define DO_BYTESWAP
+#ifdef DO_BYTESWAP
+    /* 16-bit byte swap all data before injecting it */
+    for (i=0; i< Size; i+=2)
+    {
+        uint8_t Tmp = Data[i];
+        Data[i] = Data[i+1];
+        Data[i+1] = Tmp;
+    }
+#endif
 
     struct iovec iov[2];
     iov[0].iov_base = PesHeader;
-    iov[0].iov_len  = headerSize;
-    iov[1].iov_base = call->data;
-    iov[1].iov_len  = call->len;
+    iov[0].iov_len = InsertPesHeader (PesHeader, Size, MPEG_AUDIO_PES_START_CODE, call->Pts, 0);
+    iov[1].iov_base = Data;
+    iov[1].iov_len = Size;
 
-    return writev_with_retry(call->fd, iov, 2);
+    int32_t len = writev(call->fd, iov, 2);
+    dts_printf(10, "< len %d\n", len);
+    return len;
 }
 
 /* ***************************** */
-/* Writer Definition            */
+/* Writer  Definition            */
 /* ***************************** */
 
-static WriterCaps_t capsWMAPRO = {
-    "wma/pro",
+static WriterCaps_t caps = {
+    "dts",
     eAudio,
-    "A_WMA/PRO",
-    AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA_PRO,
+    "A_DTS",
+    AUDIO_ENCODING_DTS,
+    -1,
     -1
 };
 
-struct Writer_s WriterAudioWMAPRO = {
+struct Writer_s WriterAudioDTS = {
     &reset,
     &writeData,
     NULL,
-    &capsWMAPRO
-};
-
-
-static WriterCaps_t capsWMA = {
-    "wma",
-    eAudio,
-    "A_WMA",
-    AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA,
-    -1
-};
-
-struct Writer_s WriterAudioWMA = {
-    &reset,
-    &writeData,
-    NULL,
-    &capsWMA
+    &caps
 };

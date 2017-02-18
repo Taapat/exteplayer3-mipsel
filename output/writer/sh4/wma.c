@@ -34,13 +34,11 @@
 #include <sys/uio.h>
 #include <linux/dvb/video.h>
 #include <linux/dvb/audio.h>
+#include <linux/dvb/stm_ioctls.h>
 #include <memory.h>
 #include <asm/types.h>
 #include <pthread.h>
 #include <errno.h>
-
-#include "stm_ioctls.h"
-#include "bcm_ioctls.h"
 
 #include "common.h"
 #include "output.h"
@@ -84,8 +82,6 @@ if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); 
 /* ***************************** */
 
 static int initialHeader = 1;
-static uint8_t *PesHeader = NULL;
-static uint32_t MaxPesHeader = 0;
 
 /* ***************************** */
 /* Prototypes                    */
@@ -129,50 +125,42 @@ static int writeData(void* _call)
         return 0;
     }
 
-    uint32_t packetLength = 4 + call->private_size + call->len;
-    
-    if( IsDreambox() )
+    if (initialHeader)
     {
-        packetLength += 4;
-    }
-    
-    if((packetLength + PES_MAX_HEADER_SIZE)  > MaxPesHeader)
-    {
-        if(PesHeader)
+
+        unsigned char  PesHeader[PES_MAX_HEADER_SIZE];
+
+        if ((call->private_size <= 0) || (call->private_data == NULL))
         {
-            free(PesHeader);
+            wma_err("private NULL.\n");
+            return -1;
         }
-        MaxPesHeader = packetLength + PES_MAX_HEADER_SIZE;
-        PesHeader = malloc(MaxPesHeader);
-    }
-
-    uint32_t headerSize = InsertPesHeader(PesHeader, packetLength, MPEG_AUDIO_PES_START_CODE, call->Pts, 0);
-    if( IsDreambox() )
-    {
-        PesHeader[headerSize++] = 0x42; // B
-        PesHeader[headerSize++] = 0x43; // C
-        PesHeader[headerSize++] = 0x4D; // M
-        PesHeader[headerSize++] = 0x41; // A
-    }
-
-    size_t payload_len = call->len;
-    PesHeader[headerSize++] = (payload_len >> 24) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 16) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 8)  & 0xff;
-    PesHeader[headerSize++] = payload_len & 0xff;
         
-    memcpy(PesHeader + headerSize, call->private_data, call->private_size);
-    headerSize += call->private_size;
-    
-    PesHeader[6] |= 1;
+        struct iovec iov[2];
+        iov[0].iov_base = PesHeader;
+        iov[0].iov_len = InsertPesHeader (PesHeader, call->private_size, MPEG_AUDIO_PES_START_CODE, 0, 0);
+        iov[1].iov_base = call->private_data;
+        iov[1].iov_len = call->private_size;
+        len = writev(call->fd, iov, 2);
+        initialHeader = 0;
+    }
 
-    struct iovec iov[2];
-    iov[0].iov_base = PesHeader;
-    iov[0].iov_len  = headerSize;
-    iov[1].iov_base = call->data;
-    iov[1].iov_len  = call->len;
+    if (len > -1 && call->len > 0 && call->data)
+    {
+        unsigned char  PesHeader[PES_MAX_HEADER_SIZE];
+        struct iovec iov[2];
+        iov[0].iov_base = PesHeader;
+        iov[0].iov_len = InsertPesHeader (PesHeader, call->len, MPEG_AUDIO_PES_START_CODE, call->Pts, 0);
+        iov[1].iov_base = call->data;
+        iov[1].iov_len = call->len;
 
-    return writev_with_retry(call->fd, iov, 2);
+        ssize_t l = writev(call->fd, iov, 2);
+        len = (l > -1) ? len + l : l;
+    }
+
+    wma_printf(10, "wma < %d\n", len);
+
+    return len;
 }
 
 /* ***************************** */
@@ -184,7 +172,7 @@ static WriterCaps_t capsWMAPRO = {
     eAudio,
     "A_WMA/PRO",
     AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA_PRO,
+    -1,
     -1
 };
 
@@ -201,7 +189,7 @@ static WriterCaps_t capsWMA = {
     eAudio,
     "A_WMA",
     AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA,
+    -1,
     -1
 };
 

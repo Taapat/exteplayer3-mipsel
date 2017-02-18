@@ -1,7 +1,7 @@
 /*
  * linuxdvb output/writer handling.
  *
- * konfetti 2010 based on linuxdvb.c code from libeplayer2
+ * crow 2010
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,16 +31,14 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/uio.h>
 #include <linux/dvb/video.h>
 #include <linux/dvb/audio.h>
+#include <linux/dvb/stm_ioctls.h>
 #include <memory.h>
 #include <asm/types.h>
 #include <pthread.h>
 #include <errno.h>
-
-#include "stm_ioctls.h"
-#include "bcm_ioctls.h"
+#include <sys/uio.h>
 
 #include "common.h"
 #include "output.h"
@@ -52,29 +50,27 @@
 /* ***************************** */
 /* Makros/Constants              */
 /* ***************************** */
-
 #ifdef SAM_WITH_DEBUG
-#define WMA_DEBUG
+#define H263_DEBUG
 #else
-#define WMA_SILENT
+#define H263_SILENT
 #endif
 
-#ifdef WMA_DEBUG
-
+#ifdef H263_DEBUG
 static short debug_level = 0;
+static const char *FILENAME = "h263.c";
 
-#define wma_printf(level, fmt, x...) do { \
-if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
+#define h263_printf(level, fmt, x...) do { \
+if (debug_level >= level) printf("[%s:%s] " fmt, FILENAME, __FUNCTION__, ## x); } while (0)
 #else
-#define wma_printf(level, fmt, x...)
+#define h263_printf(level, fmt, x...)
 #endif
 
-#ifndef WMA_SILENT
-#define wma_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
+#ifndef H263_SILENT
+#define h263_err(fmt, x...) do { printf("[%s:%s] " fmt, FILENAME, __FUNCTION__, ## x); } while (0)
 #else
-#define wma_err(fmt, x...)
+#define h263_err(fmt, x...)
 #endif
-
 /* ***************************** */
 /* Types                         */
 /* ***************************** */
@@ -82,10 +78,6 @@ if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); 
 /* ***************************** */
 /* Varaibles                     */
 /* ***************************** */
-
-static int initialHeader = 1;
-static uint8_t *PesHeader = NULL;
-static uint32_t MaxPesHeader = 0;
 
 /* ***************************** */
 /* Prototypes                    */
@@ -97,7 +89,6 @@ static uint32_t MaxPesHeader = 0;
 
 static int reset()
 {
-    initialHeader = 1;
     return 0;
 }
 
@@ -105,109 +96,87 @@ static int writeData(void* _call)
 {
     WriterAVCallData_t* call = (WriterAVCallData_t*) _call;
 
+    unsigned char PesHeader[PES_MAX_HEADER_SIZE];
     int len = 0;
 
-    wma_printf(10, "\n");
+    h263_printf(10, "\n");
 
     if (call == NULL)
     {
-        wma_err("call data is NULL...\n");
+        h263_err("call data is NULL...\n");
         return 0;
     }
 
-    wma_printf(10, "AudioPts %lld\n", call->Pts);
+    h263_printf(10, "VideoPts %lld\n", call->Pts);
 
     if ((call->data == NULL) || (call->len <= 0))
     {
-        wma_err("parsing NULL Data. ignoring...\n");
+        h263_err("NULL Data. ignoring...\n");
         return 0;
     }
 
     if (call->fd < 0)
     {
-        wma_err("file pointer < 0. ignoring ...\n");
+        h263_err("file pointer < 0. ignoring ...\n");
         return 0;
     }
 
-    uint32_t packetLength = 4 + call->private_size + call->len;
-    
-    if( IsDreambox() )
-    {
-        packetLength += 4;
-    }
-    
-    if((packetLength + PES_MAX_HEADER_SIZE)  > MaxPesHeader)
-    {
-        if(PesHeader)
-        {
-            free(PesHeader);
-        }
-        MaxPesHeader = packetLength + PES_MAX_HEADER_SIZE;
-        PesHeader = malloc(MaxPesHeader);
-    }
+    int HeaderLength = InsertPesHeader(PesHeader, call->len, H263_VIDEO_PES_START_CODE, call->Pts,0);
 
-    uint32_t headerSize = InsertPesHeader(PesHeader, packetLength, MPEG_AUDIO_PES_START_CODE, call->Pts, 0);
-    if( IsDreambox() )
-    {
-        PesHeader[headerSize++] = 0x42; // B
-        PesHeader[headerSize++] = 0x43; // C
-        PesHeader[headerSize++] = 0x4D; // M
-        PesHeader[headerSize++] = 0x41; // A
-    }
+    int PrivateHeaderLength = InsertVideoPrivateDataHeader (&PesHeader[HeaderLength], call->len);
 
-    size_t payload_len = call->len;
-    PesHeader[headerSize++] = (payload_len >> 24) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 16) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 8)  & 0xff;
-    PesHeader[headerSize++] = payload_len & 0xff;
-        
-    memcpy(PesHeader + headerSize, call->private_data, call->private_size);
-    headerSize += call->private_size;
-    
-    PesHeader[6] |= 1;
+    int PesLength = PesHeader[PES_LENGTH_BYTE_0] + (PesHeader[PES_LENGTH_BYTE_1] << 8) + PrivateHeaderLength;
+
+    PesHeader[PES_LENGTH_BYTE_0]            = PesLength & 0xff;
+    PesHeader[PES_LENGTH_BYTE_1]            = (PesLength >> 8) & 0xff;
+    PesHeader[PES_HEADER_DATA_LENGTH_BYTE] += PrivateHeaderLength;
+    PesHeader[PES_FLAGS_BYTE]              |= PES_EXTENSION_DATA_PRESENT;
+
+    HeaderLength                           += PrivateHeaderLength;
 
     struct iovec iov[2];
     iov[0].iov_base = PesHeader;
-    iov[0].iov_len  = headerSize;
+    iov[0].iov_len = HeaderLength;
     iov[1].iov_base = call->data;
-    iov[1].iov_len  = call->len;
+    iov[1].iov_len = call->len;
+    len = writev(call->fd, iov, 2);
 
-    return writev_with_retry(call->fd, iov, 2);
+    h263_printf(10, "< len %d\n", len);
+    return len;
 }
 
 /* ***************************** */
-/* Writer Definition            */
+/* Writer  Definition            */
 /* ***************************** */
 
-static WriterCaps_t capsWMAPRO = {
-    "wma/pro",
-    eAudio,
-    "A_WMA/PRO",
-    AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA_PRO,
+static WriterCaps_t caps_h263 = {
+    "h263",
+    eVideo,
+    "V_H263",
+    VIDEO_ENCODING_H263,
+    -1,
     -1
 };
 
-struct Writer_s WriterAudioWMAPRO = {
+struct Writer_s WriterVideoH263 = {
     &reset,
     &writeData,
     NULL,
-    &capsWMAPRO
+    &caps_h263
 };
 
-
-static WriterCaps_t capsWMA = {
-    "wma",
-    eAudio,
-    "A_WMA",
-    AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA,
+static WriterCaps_t caps_flv = {
+    "FLV",
+    eVideo,
+    "V_FLV",
+    VIDEO_ENCODING_FLV1,
+    -1,
     -1
 };
 
-struct Writer_s WriterAudioWMA = {
+struct Writer_s WriterVideoFLV = {
     &reset,
     &writeData,
     NULL,
-    &capsWMA
+    &caps_flv
 };

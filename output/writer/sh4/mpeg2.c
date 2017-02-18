@@ -34,13 +34,11 @@
 #include <sys/uio.h>
 #include <linux/dvb/video.h>
 #include <linux/dvb/audio.h>
+#include <linux/dvb/stm_ioctls.h>
 #include <memory.h>
 #include <asm/types.h>
 #include <pthread.h>
 #include <errno.h>
-
-#include "stm_ioctls.h"
-#include "bcm_ioctls.h"
 
 #include "common.h"
 #include "output.h"
@@ -52,27 +50,26 @@
 /* ***************************** */
 /* Makros/Constants              */
 /* ***************************** */
-
 #ifdef SAM_WITH_DEBUG
-#define WMA_DEBUG
+#define MPEG2_DEBUG
 #else
-#define WMA_SILENT
+#define MPEG2_SILENT
 #endif
 
-#ifdef WMA_DEBUG
+#ifdef MPEG2_DEBUG
 
 static short debug_level = 0;
 
-#define wma_printf(level, fmt, x...) do { \
+#define mpeg2_printf(level, fmt, x...) do { \
 if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
 #else
-#define wma_printf(level, fmt, x...)
+#define mpeg2_printf(level, fmt, x...)
 #endif
 
-#ifndef WMA_SILENT
-#define wma_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
+#ifndef MPEG2_SILENT
+#define mpeg2_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
 #else
-#define wma_err(fmt, x...)
+#define mpeg2_err(fmt, x...)
 #endif
 
 /* ***************************** */
@@ -82,10 +79,6 @@ if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); 
 /* ***************************** */
 /* Varaibles                     */
 /* ***************************** */
-
-static int initialHeader = 1;
-static uint8_t *PesHeader = NULL;
-static uint32_t MaxPesHeader = 0;
 
 /* ***************************** */
 /* Prototypes                    */
@@ -97,7 +90,6 @@ static uint32_t MaxPesHeader = 0;
 
 static int reset()
 {
-    initialHeader = 1;
     return 0;
 }
 
@@ -105,109 +97,94 @@ static int writeData(void* _call)
 {
     WriterAVCallData_t* call = (WriterAVCallData_t*) _call;
 
+    unsigned char               PesHeader[PES_MAX_HEADER_SIZE];
     int len = 0;
+    unsigned int Position = 0;
 
-    wma_printf(10, "\n");
+    mpeg2_printf(10, "\n");
 
     if (call == NULL)
     {
-        wma_err("call data is NULL...\n");
+        mpeg2_err("call data is NULL...\n");
         return 0;
     }
 
-    wma_printf(10, "AudioPts %lld\n", call->Pts);
+    mpeg2_printf(10, "VideoPts %lld\n", call->Pts);
 
     if ((call->data == NULL) || (call->len <= 0))
     {
-        wma_err("parsing NULL Data. ignoring...\n");
+        mpeg2_err("parsing NULL Data. ignoring...\n");
         return 0;
     }
 
     if (call->fd < 0)
     {
-        wma_err("file pointer < 0. ignoring ...\n");
+        mpeg2_err("file pointer < 0. ignoring ...\n");
         return 0;
     }
 
-    uint32_t packetLength = 4 + call->private_size + call->len;
-    
-    if( IsDreambox() )
+    while(Position < call->len) 
     {
-        packetLength += 4;
-    }
-    
-    if((packetLength + PES_MAX_HEADER_SIZE)  > MaxPesHeader)
-    {
-        if(PesHeader)
+        int32_t PacketLength = (call->len - Position) <= MAX_PES_PACKET_SIZE ?
+                           (call->len - Position) : MAX_PES_PACKET_SIZE;
+
+        int32_t Remaining = call->len - Position - PacketLength;
+
+        mpeg2_printf(20, "PacketLength=%d, Remaining=%d, Position=%d\n", PacketLength, Remaining, Position);
+
+        struct iovec iov[2];
+        iov[0].iov_base = PesHeader;
+        iov[0].iov_len = InsertPesHeader (PesHeader, PacketLength, 0xe0, call->Pts, 0);
+        iov[1].iov_base = call->data + Position;
+        iov[1].iov_len = PacketLength;
+
+        ssize_t l = writev(call->fd, iov, 2);
+        if (l < 0) 
         {
-            free(PesHeader);
+            len = l;
+            break;
         }
-        MaxPesHeader = packetLength + PES_MAX_HEADER_SIZE;
-        PesHeader = malloc(MaxPesHeader);
+        len += l;
+
+        Position += PacketLength;
+        call->Pts = INVALID_PTS_VALUE;
     }
 
-    uint32_t headerSize = InsertPesHeader(PesHeader, packetLength, MPEG_AUDIO_PES_START_CODE, call->Pts, 0);
-    if( IsDreambox() )
-    {
-        PesHeader[headerSize++] = 0x42; // B
-        PesHeader[headerSize++] = 0x43; // C
-        PesHeader[headerSize++] = 0x4D; // M
-        PesHeader[headerSize++] = 0x41; // A
-    }
-
-    size_t payload_len = call->len;
-    PesHeader[headerSize++] = (payload_len >> 24) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 16) & 0xff;
-    PesHeader[headerSize++] = (payload_len >> 8)  & 0xff;
-    PesHeader[headerSize++] = payload_len & 0xff;
-        
-    memcpy(PesHeader + headerSize, call->private_data, call->private_size);
-    headerSize += call->private_size;
-    
-    PesHeader[6] |= 1;
-
-    struct iovec iov[2];
-    iov[0].iov_base = PesHeader;
-    iov[0].iov_len  = headerSize;
-    iov[1].iov_base = call->data;
-    iov[1].iov_len  = call->len;
-
-    return writev_with_retry(call->fd, iov, 2);
+    mpeg2_printf(10, "< len %d\n", len);
+    return len;
 }
 
 /* ***************************** */
-/* Writer Definition            */
+/* Writer  Definition            */
 /* ***************************** */
-
-static WriterCaps_t capsWMAPRO = {
-    "wma/pro",
-    eAudio,
-    "A_WMA/PRO",
-    AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA_PRO,
-    -1
+static WriterCaps_t caps = {
+    "mpeg2",
+    eVideo,
+    "V_MPEG2",
+    VIDEO_ENCODING_AUTO,
+    -1,
+    -1,
 };
 
-struct Writer_s WriterAudioWMAPRO = {
+struct Writer_s WriterVideoMPEG2 = {
     &reset,
     &writeData,
     NULL,
-    &capsWMAPRO
+    &caps
 };
 
-
-static WriterCaps_t capsWMA = {
-    "wma",
-    eAudio,
-    "A_WMA",
-    AUDIO_ENCODING_WMA,
-    AUDIOTYPE_WMA,
+static WriterCaps_t h264_caps = {
+    "mpges_h264",
+    eVideo,
+    "V_MPEG2/H264",
+    VIDEO_ENCODING_H264,
+    -1,
     -1
 };
 
-struct Writer_s WriterAudioWMA = {
+struct Writer_s WriterVideoMPEGH264 = {
     &reset,
     &writeData,
     NULL,
-    &capsWMA
+    &h264_caps
 };

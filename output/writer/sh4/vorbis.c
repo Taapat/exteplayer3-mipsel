@@ -31,7 +31,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/uio.h>
 #include <linux/dvb/video.h>
 #include <linux/dvb/audio.h>
 #include <memory.h>
@@ -39,12 +38,10 @@
 #include <pthread.h>
 #include <errno.h>
 
-#include "stm_ioctls.h"
-#include "bcm_ioctls.h"
-
 #include "common.h"
 #include "output.h"
 #include "debug.h"
+#include "stm_ioctls.h"
 #include "misc.h"
 #include "pes.h"
 #include "writer.h"
@@ -52,28 +49,26 @@
 /* ***************************** */
 /* Makros/Constants              */
 /* ***************************** */
-
-//#define SAM_WITH_DEBUG
 #ifdef SAM_WITH_DEBUG
-#define MPEG4_DEBUG
+#define VORBIS_DEBUG
 #else
-#define MPEG4_SILENT
+#define VORBIS_SILENT
 #endif
 
-#ifdef MPEG4_DEBUG
+#ifdef VORBIS_DEBUG
 
-static short debug_level = 0;
+static short debug_level = 1;
 
-#define mpeg4_printf(level, fmt, x...) do { \
+#define vorbis_printf(level, fmt, x...) do { \
 if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
 #else
-#define mpeg4_printf(level, fmt, x...)
+#define vorbis_printf(level, fmt, x...)
 #endif
 
-#ifndef MPEG4_SILENT
-#define mpeg4_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
+#ifndef VORBIS_SILENT
+#define vorbis_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
 #else
-#define mpeg4_err(fmt, x...)
+#define vorbis_err(fmt, x...)
 #endif
 
 /* ***************************** */
@@ -83,7 +78,6 @@ if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); 
 /* ***************************** */
 /* Varaibles                     */
 /* ***************************** */
-static int initialHeader = 1;
 
 /* ***************************** */
 /* Prototypes                    */
@@ -92,9 +86,9 @@ static int initialHeader = 1;
 /* ***************************** */
 /* MISC Functions                */
 /* ***************************** */
+
 static int reset()
 {
-    initialHeader = 1;
     return 0;
 }
 
@@ -104,53 +98,40 @@ static int writeData(void* _call)
 
     unsigned char  PesHeader[PES_MAX_HEADER_SIZE];
 
-    mpeg4_printf(10, "\n");
+    vorbis_printf(10, "\n");
 
     if (call == NULL)
     {
-        mpeg4_err("call data is NULL...\n");
+        vorbis_err("call data is NULL...\n");
         return 0;
     }
 
+    vorbis_printf(10, "AudioPts %lld\n", call->Pts);
+
     if ((call->data == NULL) || (call->len <= 0))
     {
-        mpeg4_err("parsing NULL Data. ignoring...\n");
+        vorbis_err("parsing NULL Data. ignoring...\n");
         return 0;
     }
 
     if (call->fd < 0)
     {
-        mpeg4_err("file pointer < 0. ignoring ...\n");
+        vorbis_err("file pointer < 0. ignoring ...\n");
         return 0;
     }
 
-    mpeg4_printf(10, "VideoPts %lld\n", call->Pts);
+    int HeaderLength = InsertPesHeader (PesHeader, call->len , MPEG_AUDIO_PES_START_CODE, call->Pts, 0);
 
+    unsigned char* PacketStart = malloc(call->len + HeaderLength);
 
-    unsigned int PacketLength = call->len;
-    if (initialHeader && call->private_size && call->private_data != NULL)
-    {
-        PacketLength += call->private_size;
-    }
+    memcpy (PacketStart, PesHeader, HeaderLength);
+    memcpy (PacketStart + HeaderLength, call->data, call->len);
 
-    struct iovec iov[2];
-    int ic = 0;
-    iov[ic].iov_base = PesHeader;
-    iov[ic++].iov_len = InsertPesHeader (PesHeader, PacketLength, MPEG_VIDEO_PES_START_CODE, call->Pts, 0);
+    int len = write(call->fd, PacketStart, call->len + HeaderLength);
 
-    if (initialHeader && call->private_size && call->private_data != NULL)
-    {
-        initialHeader = 0;
-        iov[ic].iov_base = call->private_data;
-        iov[ic++].iov_len = call->private_size;
-    }
-    iov[ic].iov_base = call->data;
-    iov[ic++].iov_len = call->len;
+    free(PacketStart);
 
-    int len = writev_with_retry(call->fd, iov, ic);
-
-    mpeg4_printf(10, "xvid_Write < len=%d\n", len);
-
+    vorbis_printf(10, "vorbis_Write-< len=%d\n", len);
     return len;
 }
 
@@ -158,18 +139,18 @@ static int writeData(void* _call)
 /* Writer  Definition            */
 /* ***************************** */
 
-static WriterCaps_t mpeg4p2_caps = {
-    "mpeg4p2",
-    eVideo,
-    "V_MPEG4",
-    VIDEO_ENCODING_MPEG4P2,
-    STREAMTYPE_MPEG4_Part2,
+static WriterCaps_t caps_vorbis = {
+    "vorbis",
+    eAudio,
+    "A_VORBIS",
+    AUDIO_ENCODING_VORBIS,
+    -1,
     -1
 };
 
-struct Writer_s WriterVideoMPEG4 = {
+struct Writer_s WriterAudioVORBIS = {
     &reset,
     &writeData,
     NULL,
-    &mpeg4p2_caps
+    &caps_vorbis
 };

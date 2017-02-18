@@ -55,10 +55,10 @@
 /* ***************************** */
 /* Makros/Constants              */
 /* ***************************** */
-//#define H264_DEBUG
-#ifdef H264_DEBUG
+//#define H265_DEBUG
+#ifdef H265_DEBUG
 
-static short debug_level = 0;
+static short debug_level = 10;
 
 #define h264_printf(level, fmt, x...) do { \
 if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
@@ -66,7 +66,7 @@ if (debug_level >= level) printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); 
 #define h264_printf(level, fmt, x...)
 #endif
 
-#ifndef H264_SILENT
+#ifndef H265_SILENT
 #define h264_err(fmt, x...) do { printf("[%s:%s] " fmt, __FILE__, __FUNCTION__, ## x); } while (0)
 #else
 #define h264_err(fmt, x...)
@@ -86,7 +86,6 @@ static int                     initialHeader = 1;
 static unsigned int            NalLengthBytes = 1;
 static unsigned char           *CodecData     = NULL; 
 static unsigned int            CodecDataLen   = 0;
-static int                     avc3 = 0;
 /* ***************************** */
 /* Prototypes                    */
 /* ***************************** */
@@ -95,195 +94,67 @@ static int                     avc3 = 0;
 /* MISC Functions                */
 /* ***************************** */
 
-// Please see: https://bugzilla.mozilla.org/show_bug.cgi?id=1105771
-static int32_t UpdateExtraData(uint8_t **ppExtraData, uint32_t *pExtraDataSize, uint8_t *pData, uint32_t dataSize)
-{
-    uint8_t *aExtraData = *ppExtraData;
-    
-    if (aExtraData[0] != 1 || !pData) {
-        // Not AVCC or nothing to update with.
-        return -1;
-    }
-    
-    int32_t nalsize = (aExtraData[4] & 3) + 1;
-    
-    uint8_t sps[256];
-    uint8_t spsIdx = 0;
-    
-    uint8_t numSps = 0;
-    
-    uint8_t pps[256];
-    uint8_t ppsIdx = 0;
-    
-    uint8_t numPps = 0;
-
-    if(nalsize != 4)
-    {
-        return -1;
-    }
-    
-    // Find SPS and PPS NALUs in AVCC data
-    uint8_t *d = pData;
-    while (d + 4 < pData + dataSize)
-    {
-        uint32_t nalLen = ReadUint32(d);
-        
-        uint8_t nalType = d[4] & 0x1f;
-        if (nalType == 7) 
-        { /* SPS */
-        
-            // 16 bits size
-            sps[spsIdx++] = (uint8_t)(0xFF & (nalLen >> 8));
-            sps[spsIdx++] = (uint8_t)(0xFF & nalLen);
-            
-            if (spsIdx + nalLen >= sizeof(sps))
-            {
-                h264_err("SPS no free space to copy...\n");
-                return -1;
-            }
-            memcpy(&(sps[spsIdx]), d + 4, nalLen);
-            spsIdx += nalLen;
-            
-            numSps += 1;
-            
-            h264_printf(10, "SPS len[%u]...\n", nalLen);
-        } 
-        else if (nalType == 8)
-        { /* PPS */
-
-            // 16 bits size
-            pps[ppsIdx++] = (uint8_t)(0xFF & (nalLen >> 8));
-            pps[ppsIdx++] = (uint8_t)(0xFF & nalLen);
-            
-            if (ppsIdx + nalLen >= sizeof(sps))
-            {
-                h264_err("PPS not free space to copy...\n");
-                return -1;
-            }
-            memcpy(&(pps[ppsIdx]), d + 4, nalLen);
-            ppsIdx += nalLen;
-            
-            numPps += 1;
-            
-            h264_printf(10, "PPS len[%u]...\n", nalLen);
-        }
-        d += 4 + nalLen;
-    }
-    uint32_t idx = 0;
-    *ppExtraData = malloc(7 + spsIdx + ppsIdx);
-    aExtraData = *ppExtraData;
-    aExtraData[idx++] = 0x1;            // version
-    aExtraData[idx++] = sps[3];         // profile
-    aExtraData[idx++] = sps[4];         // profile compat
-    aExtraData[idx++] = sps[5];         // level
-    aExtraData[idx++] = 0xff;           // nal size - 1
-    
-    aExtraData[idx++] = 0xe0 | numSps;
-    if (numSps)
-    {
-        memcpy(&(aExtraData[idx]), sps, spsIdx);
-        idx += spsIdx;
-    }
-    
-    aExtraData[idx++] = numPps;
-    if (numPps)
-    {
-        memcpy(&(aExtraData[idx]), pps, ppsIdx);
-        idx += ppsIdx;
-    }
-    
-    h264_printf(10, "aExtraData len[%u]...\n", idx);
-    *pExtraDataSize = idx;
-    return 0;
-}
-
 static int32_t PreparCodecData(unsigned char *data, unsigned int cd_len, unsigned int *NalLength)
 {
-    h264_printf(10, "H264 check codec data..!\n");
+    h264_printf(10, "H265 check codec data..!\n");
     int32_t ret = -100;
     if (data)
     {
         unsigned char tmp[2048];
         unsigned int tmp_len = 0;
 
-        unsigned int cd_pos = 0;
-        h264_printf(10, "H264 have codec data..!\n");
-        if (cd_len > 7 && data[0] == 1)
+        h264_printf(10, "H265 have codec data..!");
+
+        if (cd_len > 3 && (data[0] || data[1] || data[2] > 1))
         {
-            unsigned short len = (data[6] << 8) | data[7];
-            if (cd_len >= (len + 8))
+            if (cd_len > 22)
             {
-                unsigned int i=0;
-                uint8_t profile_num[] = { 66, 77, 88, 100 };
-                uint8_t profile_cmp[2] = { 0x67, 0x00 };
-                const char *profile_str[] = { "baseline", "main", "extended", "high" };
-                memcpy(tmp, Head, sizeof(Head));
-                tmp_len += 4;
-                memcpy(tmp + tmp_len, data + 8, len);
-                for (i = 0; i < 4; ++i)
+                int i;
+                if (data[0] != 0) 
                 {
-                    profile_cmp[1] = profile_num[i];
-                    if (!memcmp(tmp+tmp_len, profile_cmp, 2))
+                    h264_printf(10, "Unsupported extra data version %d, decoding may fail", (int)data[0]);
+                }
+                
+                *NalLength = (data[21] & 3) + 1;
+                int num_param_sets = data[22];
+                int pos = 23;
+                for (i = 0; i < num_param_sets; i++)
+                {
+                    int j;
+                    if (pos + 3 > cd_len) 
                     {
-                        uint8_t level_org = tmp[tmp_len + 3];
-                        if (level_org > 0x29)
-                        {
-                            h264_printf(10, "H264 %s profile@%d.%d patched down to 4.1!", profile_str[i], level_org / 10 , level_org % 10);
-                            tmp[tmp_len+3] = 0x29; // level 4.1
-                        }
-                        else
-                        {
-                            h264_printf(10, "H264 %s profile@%d.%d", profile_str[i], level_org / 10 , level_org % 10);
-                        }
+                        h264_printf(10, "Buffer underrun in extra header (%d >= %u)", pos + 3, cd_len);
                         break;
                     }
-                }
-                tmp_len += len;
-                cd_pos = 8 + len;
-                if (cd_len > (cd_pos + 2))
-                {
-                    len = (data[cd_pos + 1] << 8) | data[cd_pos + 2];
-                    cd_pos += 3;
-                    if (cd_len >= (cd_pos+len))
+                    // ignore flags + NAL type (1 byte)
+                    int nal_count = data[pos + 1] << 8 | data[pos + 2];
+                    pos += 3;
+                    for (j = 0; j < nal_count; j++)
                     {
+                        if (pos + 2 > cd_len)
+                        {
+                            h264_printf(10, "Buffer underrun in extra nal header (%d >= %u)", pos + 2, cd_len);
+                            break;
+                        }
+                        int nal_size = data[pos] << 8 | data[pos + 1];
+                        pos += 2;
+                        if (pos + nal_size > cd_len)
+                        {
+                            h264_printf(10, "Buffer underrun in extra nal (%d >= %u)", pos + 2 + nal_size, cd_len);
+                            break;
+                        }
                         memcpy(tmp+tmp_len, "\x00\x00\x00\x01", 4);
                         tmp_len += 4;
-                        memcpy(tmp+tmp_len, data+cd_pos, len);
-                        tmp_len += len;
-                        
-                        CodecData = malloc(tmp_len);
-                        memcpy(CodecData, tmp, tmp_len);
-                        CodecDataLen = tmp_len;
-                        
-                        *NalLength = (data[4] & 0x03) + 1;
-                        ret = 0;
-                    }
-                    else
-                    {
-                        h264_printf(10, "codec_data too short(4)");
-                        ret = -4;
+                        memcpy(tmp + tmp_len, data + pos, nal_size);
+                        tmp_len += nal_size;
+                        pos += nal_size;
                     }
                 }
-                else
-                {
-                    h264_printf(10,  "codec_data too short(3)");
-                    ret = -3;
-                }
+                
+                CodecData = malloc(tmp_len);
+                memcpy(CodecData, tmp, tmp_len);
+                CodecDataLen = tmp_len;
             }
-            else
-            {
-                h264_printf(10, "codec_data too short(2)");
-                ret = -2;
-            }
-        }
-        else if (cd_len <= 7)
-        {
-            h264_printf(10, "codec_data too short(1)");
-            ret = -1;
-        }
-        else
-        {
-            h264_printf(10, "wrong avcC version %d!", data[0]);
         }
     }
     else
@@ -297,7 +168,6 @@ static int32_t PreparCodecData(unsigned char *data, unsigned int cd_len, unsigne
 static int reset()
 {
     initialHeader = 1;
-    avc3 = 0;
     return 0;
 }
 
@@ -337,12 +207,10 @@ static int writeData(void* _call)
         h264_err("file pointer < 0. ignoring ...\n");
         return 0;
     }
-
-    /* AnnexA */
-    if( !avc3 && ((1 < call->private_size && 0 == call->private_data[0]) || 
-        (call->len > 3) && ((call->data[0] == 0x00 && call->data[1] == 0x00 && call->data[2] == 0x00 && call->data[3] == 0x01) ||
-        (call->data[0] == 0xff && call->data[1] == 0xff && call->data[2] == 0xff && call->data[3] == 0xff))))
+    
+    if( call->InfoFlags & 0x1 ) // TS container
     {
+        h264_printf(10, "H265 simple inject method!\n");
         uint32_t PacketLength = 0;
         uint32_t FakeStartCode = (call->Version << 8) | PES_VERSION_FAKE_START_CODE;
         
@@ -363,22 +231,9 @@ static int writeData(void* _call)
         iov[ic++].iov_len = call->len;
         PacketLength     += call->len;
         
-        /*Hellmaster1024: some packets will only be accepted by the player if we send one byte more than
-                          data is available. The content of this byte does not matter. It will be ignored
-                          by the player */
-        /*
-        iov[ic].iov_base = "\0";
-        iov[ic++].iov_len = 1;
-        */
-        
         iov[0].iov_len = InsertPesHeader(PesHeader, -1, MPEG_VIDEO_PES_START_CODE, VideoPts, FakeStartCode);
         
         return writev_with_retry(call->fd, iov, ic);
-    }
-    else if (!call->private_data || call->private_size < 7 || 1 != call->private_data[0])
-    {
-        h264_err("No valid private data available! [%d]\n", (int)call->private_size);
-        return 0;
     }
 
     uint32_t PacketLength = 0;
@@ -397,18 +252,7 @@ static int writeData(void* _call)
         uint8_t  *private_data = call->private_data;
         uint32_t  private_size = call->private_size;
     
-        if ( PreparCodecData(private_data, private_size, &NalLengthBytes))
-        {
-            UpdateExtraData(&private_data, &private_size, call->data, call->len);
-            PreparCodecData(private_data, private_size, &NalLengthBytes);
-        }
-        
-        if (private_data != call->private_data)
-        {
-            avc3 = 1;
-            free(private_data);
-            private_data = NULL;
-        }
+        PreparCodecData(private_data, private_size, &NalLengthBytes);
         
         if (CodecData != NULL)
         {
@@ -481,15 +325,15 @@ static int writeReverseData(void* _call)
 /* ***************************** */
 
 static WriterCaps_t caps = {
-    "h264",
+    "h265",
     eVideo,
-    "V_MPEG4/ISO/AVC",
-    VIDEO_ENCODING_H264,
-    STREAMTYPE_MPEG4_H264,
-    CT_H264
+    "V_HEVC",
+    -1,
+    STREAMTYPE_MPEG4_H265,
+    CT_H265
 };
 
-struct Writer_s WriterVideoH264 = {
+struct Writer_s WriterVideoH265 = {
     &reset,
     &writeData,
     &writeReverseData,

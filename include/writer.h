@@ -20,6 +20,7 @@ typedef struct {
     unsigned int           Width;
     unsigned int           Height;
     unsigned char          Version;
+    unsigned int           InfoFlags;
 } WriterAVCallData_t;
 
 
@@ -49,7 +50,7 @@ extern Writer_t WriterAudioMPEGL3;
 extern Writer_t WriterAudioAC3;
 extern Writer_t WriterAudioEAC3;
 extern Writer_t WriterAudioAAC;
-extern Writer_t WriterAudioAACHE;
+extern Writer_t WriterAudioAACLATM;
 extern Writer_t WriterAudioAACPLUS;
 extern Writer_t WriterAudioDTS;
 extern Writer_t WriterAudioWMA;
@@ -69,8 +70,13 @@ extern Writer_t WriterVideoDIVX;
 extern Writer_t WriterVideoFOURCC;
 extern Writer_t WriterVideoMSCOMP;
 extern Writer_t WriterVideoH263;
+extern Writer_t WriterVideoH265;
 extern Writer_t WriterVideoFLV;
 extern Writer_t WriterVideoVC1;
+extern Writer_t WriterVideoVP6;
+extern Writer_t WriterVideoVP8;
+extern Writer_t WriterVideoVP9;
+extern Writer_t WriterVideoSPARK;
 extern Writer_t WriterFramebuffer;
 extern Writer_t WriterPipe;
 

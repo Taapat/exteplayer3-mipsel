@@ -47,9 +47,13 @@ typedef struct Track_s {
     eTrackTypeEplayer     type;
     int                   width;
     int                   height;
+    int32_t               aspect_ratio_num;
+    int32_t               aspect_ratio_den;
 
     /* stream from ffmpeg */
     void               *  stream;
+    /* AVCodecContext  for steam */
+    void               *  avCodecCtx;
     /* codec extra data (header or some other stuff) */
     void               *  extraData;
     int		              extraSize;
@@ -74,6 +78,8 @@ typedef struct TrackDescription_s
     unsigned int          frame_rate;
     int                   width;
     int                   height;
+    int32_t               aspect_ratio_num;
+    int32_t               aspect_ratio_den;
     int                   progressive;
     
 } TrackDescription_t;

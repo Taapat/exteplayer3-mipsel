@@ -33,6 +33,7 @@
 #include <sys/ioctl.h>
 #include <linux/dvb/video.h>
 #include <linux/dvb/audio.h>
+#include <linux/dvb/stm_ioctls.h>
 #include <memory.h>
 #include <asm/types.h>
 #include <pthread.h>
@@ -42,8 +43,6 @@
 #include <libavutil/intreadwrite.h>
 #include "ffmpeg/latmenc.h"
 
-#include "stm_ioctls.h"
-#include "bcm_ioctls.h"
 
 #include "common.h"
 #include "output.h"
@@ -203,7 +202,7 @@ static int _writeData(void *_call, int type)
     iov[0].iov_len = HeaderLength;
     iov[1].iov_base = call->data;
     iov[1].iov_len = call->len;
-    return writev_with_retry(call->fd, iov, 2);
+    return writev(call->fd, iov, 2);
 }
 
 static int writeDataADTS(void *_call)
@@ -264,8 +263,6 @@ static int writeDataADTS(void *_call)
     /* buffer fullness(0x7FF for VBR) continued over 6 first bits + 2 zeros for
      * number of raw data blocks */
     pExtraData[6] = 0xFC;
-    
-    //PesHeader[6] = 0x81;
 
     struct iovec iov[2];
     iov[0].iov_base = PesHeader;
@@ -273,7 +270,7 @@ static int writeDataADTS(void *_call)
     iov[1].iov_base = call->data;
     iov[1].iov_len = call->len;
     
-    return writev_with_retry(call->fd, iov, 2);
+    return writev(call->fd, iov, 2);
 }
 
 static int writeDataLATM(void *_call)
@@ -343,7 +340,7 @@ static int writeDataLATM(void *_call)
     iov[2].iov_base = pLATMCtx->buffer;
     iov[2].iov_len  = pLATMCtx->len;
     
-    return writev_with_retry(call->fd, iov, 3);
+    return writev(call->fd, iov, 3);
 }
 
 /* ***************************** */
@@ -354,8 +351,8 @@ static WriterCaps_t caps = {
     "aac",
     eAudio,
     "A_AAC",
+    AUDIO_ENCODING_AAC,
     -1,
-    AUDIOTYPE_AAC_PLUS,
     -1
 };
 
@@ -370,8 +367,8 @@ static WriterCaps_t caps_aac_latm = {
     "aac",
     eAudio,
     "A_AAC_LATM",
-    -1,
-    AUDIOTYPE_AAC_HE, // it is some misunderstanding, this should be AUDIOTYPE_AAC_LATM
+    AUDIO_ENCODING_AAC,
+    -1, // it is some misunderstanding, this should be AUDIOTYPE_AAC_LATM
     -1
 };
 
@@ -386,8 +383,8 @@ static WriterCaps_t caps_aacplus = {
     "aac",
     eAudio,
     "A_AAC_PLUS",
+    AUDIO_ENCODING_AAC,
     -1,
-    AUDIOTYPE_AAC_PLUS,
     -1
 };
 
