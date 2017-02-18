@@ -1620,21 +1620,8 @@ int32_t container_ffmpeg_init_av_context(Context_t *context, char *filename, int
         }
     }
 //for buffered io (end)
-    return ret;
-
-fail_open:
-    ffmpeg_err("avformat_open_input failed %d (%s)\n", err, filename);
-    av_strerror(err, error, 512);
-    ffmpeg_err("Cause: %s\n", error);
-    if(avio_opts != NULL)
-    {
-        av_dict_free(&avio_opts);
-    }
-fail:
-    avformat_close_input(&avContextTab[AVIdx]);
-fail_alloc:
-    avformat_network_deinit();
-    return ret;
+    
+    return 0;
 }
 
 int32_t container_ffmpeg_init(Context_t *context, PlayFiles_t *playFilesNames)
