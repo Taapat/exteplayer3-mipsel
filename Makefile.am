@@ -4,7 +4,8 @@ AM_CFLAGS = -pipe -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE -D_LARGEFILE_SOUR
 CXXFLAGS = -Wall
 
 AM_CPPFLAGS = \
-	-I../git/include
+	-I../git/include \
+	-I../git/external
 
 lib_LTLIBRARIES = libexteplayer3.la
 
@@ -29,13 +30,19 @@ libexteplayer3_la_SOURCES = \
     output/writer/mipsel/dts.c \
     output/writer/mipsel/amr.c \
     output/writer/mipsel/wma.c \
+    output/writer/mipsel/h265.c \
     output/writer/mipsel/h264.c \
     output/writer/mipsel/h263.c \
     output/writer/mipsel/mpeg2.c \
     output/writer/mipsel/mpeg4.c \
     output/writer/mipsel/divx3.c \
     output/writer/mipsel/vc1.c \
-    playback/playback.c
+    output/writer/mipsel/vp.c \
+    output/writer/mipsel/wmv.c \
+    playback/playback.c \
+    external/ffmpeg/src/bitstream.c \
+    external/ffmpeg/src/latmenc.c \
+    external/ffmpeg/src/mpeg4audio.c
 
 libexteplayer3_la_LIBADD = -lpthread -lavformat -lavcodec -lavutil -lswresample
 
